@@ -15,6 +15,7 @@ import java.awt.Color;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 public class Hotcold extends ListenerAdapter {
 
@@ -28,6 +29,7 @@ public class Hotcold extends ListenerAdapter {
             "rainbow", "<:mixed:1495282804534153296>"
     );
 
+    private String hostId = null;
     private Message lastBettingMessage = null;
     private boolean isBettingOpen = false;
     private boolean isProcessing = false;
@@ -38,7 +40,8 @@ public class Hotcold extends ListenerAdapter {
     @Override
     public void onSlashCommandInteraction(SlashCommandInteractionEvent event) {
         if (event.getName().equals("hc")) {
-            event.reply("✅ HotCold Session Started!").setEphemeral(true).queue();
+            hostId = event.getUser().getId();
+            event.reply("HotCold Session Started!").setEphemeral(true).queue();
             startNewRound(event.getOption("channel").getAsChannel().asTextChannel());
         }
     }
@@ -47,15 +50,9 @@ public class Hotcold extends ListenerAdapter {
     public void onButtonInteraction(ButtonInteractionEvent event) {
         String id = event.getComponentId();
         if (id.startsWith("hc_bet_")) {
-            if (!isBettingOpen) { 
-                event.reply("❌ This round has ended! Please wait for the next one.").setEphemeral(true).queue(); 
-                return; 
-            }
-            String side = id.split("_")[2];
-            event.replyModal(Modal.create("m_hc_" + side, "Place Your Bet")
-                    .addActionRows(ActionRow.of(TextInput.create("amt", "Amount (M)", TextInputStyle.SHORT)
-                            .setPlaceholder("Example: 10")
-                            .setRequired(true).build())).build()).queue();
+            if (!isBettingOpen) { event.reply("Round ended!").setEphemeral(true).queue(); return; }
+            event.replyModal(Modal.create("m_hc_" + id.split("_")[2], "Place Bet")
+                    .addActionRows(ActionRow.of(TextInput.create("amt", "Amount (M)", TextInputStyle.SHORT).build())).build()).queue();
         }
     }
 
@@ -67,37 +64,31 @@ public class Hotcold extends ListenerAdapter {
                 double amt = Double.parseDouble(event.getValue("amt").getAsString().toLowerCase().replace("m", ""));
                 String userId = event.getUser().getId();
 
-                if (amt <= 0) { event.reply("❌ Amount must be greater than 0!").setEphemeral(true).queue(); return; }
-
-                // MongoDB fetch balance
+                // Fetch from MongoDB
                 Main.UserData ud = Main.getUserData(userId);
-                if (ud.balance < amt) { 
-                    event.reply("❌ Insufficient Balance! Current: " + String.format("%.2fM", ud.balance)).setEphemeral(true).queue(); 
-                    return; 
-                }
+                if (ud.balance < amt) { event.reply("Error: Insufficient Balance.").setEphemeral(true).queue(); return; }
 
-                // Deduct and Save to MongoDB
+                // Deduct and Save to Cloud
                 ud.balance -= amt;
-                Main.saveUserData(userId, ud); 
+                Main.saveUserData(userId, ud);
+                
+                // Update stats
                 Main.updateWagerAndRakeback(userId, amt);
 
                 currentBets.add(new Bet(userId, side, amt));
 
-                event.reply(String.format("✅ **Bet Placed!**\nAmount: `%.2fM` | Side: `%s`", amt, side.toUpperCase()))
-                        .setEphemeral(true).queue();
+                event.reply(String.format("✅ **Bet Placed!** Amount: `%.2fM` | Side: `%s`", amt, side.toUpperCase()))
+                        .setEphemeral(true)
+                        .queue(hook -> hook.deleteOriginal().queueAfter(5, TimeUnit.SECONDS));
 
                 if (!isTimerStarted) startCountdown(event.getChannel().asTextChannel());
 
-            } catch (Exception e) { 
-                event.reply("❌ Invalid Amount Format! Please enter a number.").setEphemeral(true).queue(); 
-            }
+            } catch (Exception e) { event.reply("Error: Invalid Amount.").setEphemeral(true).queue(); }
         }
     }
 
     private void startNewRound(TextChannel channel) {
-        isBettingOpen = true; 
-        isProcessing = false; 
-        isTimerStarted = false;
+        isBettingOpen = true; isProcessing = false; isTimerStarted = false;
         currentBets.clear();
         sendBettingEmbed(channel, false);
     }
@@ -106,10 +97,7 @@ public class Hotcold extends ListenerAdapter {
         isTimerStarted = true;
         sendBettingEmbed(channel, true);
         Main.scheduler.schedule(() -> {
-            if (isBettingOpen) { 
-                isBettingOpen = false; 
-                processResults(channel); 
-            }
+            if (isBettingOpen) { isBettingOpen = false; processResults(channel); }
         }, 30, TimeUnit.SECONDS);
     }
 
@@ -130,13 +118,16 @@ public class Hotcold extends ListenerAdapter {
         boolean anybodyLost = false;
 
         for (Bet b : currentBets) {
+            // Get fresh data from Mongo for each winner
             Main.UserData ud = Main.getUserData(b.userId);
 
             if (b.side.equals(winningSide)) {
                 double mult = winningSide.equals("hot") ? 2.5 : (winningSide.equals("cold") ? 3.0 : 8.0);
                 double winAmt = b.amount * mult;
                 ud.balance += winAmt;
-                Main.saveUserData(b.userId, ud); 
+                
+                // Save win to Mongo
+                Main.saveUserData(b.userId, ud);
                 
                 payoutList.append("<@").append(b.userId).append("> WON **").append(String.format("%.2f", winAmt)).append("M**\n");
                 anybodyWon = true;
@@ -151,20 +142,19 @@ public class Hotcold extends ListenerAdapter {
                 .setColor(anybodyWon ? Color.GREEN : Color.RED)
                 .setDescription(String.format(
                         "**Rolled Flower:** %s (%s)\n\n" +
-                        "### %s WINS!",
+                                "# %s WINS!",
                         FLOWERS.get(rolled), rolled.toUpperCase(), winningSide.toUpperCase()
                 ));
 
         if (anybodyWon) rb.addField("", payoutList.toString(), false);
         if (anybodyLost) rb.addField("", loserList.toString(), false);
-        if (!anybodyWon && !anybodyLost) rb.addField("", "*No active players this round.*", false);
+        if (!anybodyWon && !anybodyLost) rb.addField("", "*No real players in this round.*", false);
 
-        rb.setFooter("Arcade Economy System").setTimestamp(Instant.now());
-        
+        rb.setTimestamp(Instant.now());
         if (lastBettingMessage != null) lastBettingMessage.delete().queue(null, t -> {});
 
         channel.sendMessageEmbeds(rb.build()).queue(s ->
-                Main.scheduler.schedule(() -> startNewRound(channel), 6, TimeUnit.SECONDS)
+                Main.scheduler.schedule(() -> startNewRound(channel), 5, TimeUnit.SECONDS)
         );
     }
 
@@ -172,26 +162,26 @@ public class Hotcold extends ListenerAdapter {
         String timeDisplay = withTimer ? String.format("<t:%d:R>", (System.currentTimeMillis() / 1000) + 30) : "Waiting for bets...";
         EmbedBuilder eb = new EmbedBuilder()
                 .setAuthor("Play Hot Cold", null, channel.getGuild().getIconUrl())
-                .setColor(new Color(255, 105, 180)) // Hot Pink
+                .setColor(new Color(255, 105, 180))
                 .setDescription(String.format(
-                        "**▸ Round Starts:** %s\n" +
-                        "**▸ Hot (R/O/Y):** `x2.5`\n" +
-                        "**▸ Cold (B/A/P):** `x3.0`\n" +
-                        "**▸ Rainbow (M):** `x8.0`\n" +
-                        "**▸ History:** %s\n\n" +
-                        "Click a button below to place your bet!",
+                        "**▸ Next Game Time:** %s\n" +
+                                "**▸ Payout Multiplier (Hot):** `x2.5`\n" +
+                                "**▸ Payout Multiplier (Cold):** `x3.0`\n" +
+                                "**▸ Payout Multiplier (Rainbow):** `x8.0`\n" +
+                                "**▸ Current Streak:** %s\n\n" +
+                                "Click a button bellow to bet on Hot, Cold or Rainbow! Games are automatically launched every 30 seconds",
                         timeDisplay, (streak.isEmpty() ? "None" : String.join(" ", streak))
                 ))
-                .setFooter("Minimum: 0.01M | Maximum: 500M")
+                .setFooter("Hosted by Staff")
                 .setTimestamp(Instant.now());
 
         if (withTimer && lastBettingMessage != null) {
             lastBettingMessage.editMessageEmbeds(eb.build()).queue();
         } else {
             channel.sendMessageEmbeds(eb.build()).addActionRow(
-                    Button.danger("hc_bet_hot", "Bet Hot"),
-                    Button.primary("hc_bet_cold", "Bet Cold"),
-                    Button.success("hc_bet_rainbow", "Bet Rainbow")
+                    Button.danger("hc_bet_hot", "Bet on Hot"),
+                    Button.primary("hc_bet_cold", "Bet on Cold"),
+                    Button.success("hc_bet_rainbow", "Bet on Rainbow")
             ).queue(msg -> lastBettingMessage = msg);
         }
     }
@@ -202,8 +192,5 @@ public class Hotcold extends ListenerAdapter {
         return "rainbow";
     }
 
-    private static class Bet { 
-        String userId, side; double amount; 
-        Bet(String u, String s, double a) { userId=u; side=s; amount=a; } 
-    }
+    private static class Bet { String userId, side; double amount; Bet(String u, String s, double a) { userId=u; side=s; amount=a; } }
 }
