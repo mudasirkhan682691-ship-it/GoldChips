@@ -1,0 +1,1 @@
+worker: java -jar target/Gold-Chips-1.0-SNAPSHOT.jar
