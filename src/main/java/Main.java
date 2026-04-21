@@ -79,7 +79,7 @@ public class Main extends ListenerAdapter {
 
     public static void saveUserData(String userId, UserData data) {
         Document doc = Document.parse(gson.toJson(data));
-        doc.put("_id", userId); // Set the unique ID for MongoDB
+        doc.put("_id", userId); 
         userCollection.replaceOne(new Document("_id", userId), doc, new ReplaceOptions().upsert(true));
     }
 
@@ -96,13 +96,13 @@ public class Main extends ListenerAdapter {
     public void onSlashCommandInteraction(SlashCommandInteractionEvent event) {
         if (event.getName().equals("wallet")) {
             UserData data = getUserData(event.getUser().getId());
-            event.replyEmbeds(buildCleanEmbed(event.getUser(), data).build()).setEphemeral(true)
+            event.replyEmbeds(buildCleanEmbed(event.getUser(), data).build())
                     .addActionRow(Button.secondary("redeem_code", "Redeem Code"), Button.success("claim_rakeback", "Claim Rakeback")).queue();
         } else if (event.getName().equals("getwallet")) {
             Member target = event.getOption("user").getAsMember();
             if (target == null) return;
             UserData data = getUserData(target.getId());
-            event.replyEmbeds(buildAdminSecurityEmbed(target, data).build()).setEphemeral(true)
+            event.replyEmbeds(buildAdminSecurityEmbed(target, data).build())
                     .addActionRow(Button.primary("admin_credit_" + target.getId(), "Credit"), Button.danger("admin_debit_" + target.getId(), "Debit")).queue();
         }
     }
@@ -113,7 +113,7 @@ public class Main extends ListenerAdapter {
         if (id.startsWith("admin_")) {
             String type = id.contains("credit") ? "Credit" : "Debit";
             event.replyModal(Modal.create("modal_admin_" + type + "_" + id.split("_")[2], type)
-                    .addActionRows(ActionRow.of(TextInput.create("amount", "Amount", TextInputStyle.SHORT).build())).build()).queue();
+                    .addActionRows(ActionRow.of(TextInput.create("amount", "Amount", TextInputStyle.SHORT).setPlaceholder("Example: 10 or 10m").build())).build()).queue();
         } else if (id.equals("claim_rakeback")) {
             UserData ud = getUserData(event.getUser().getId());
             if (ud.rakeback < 0.01) {
@@ -121,12 +121,13 @@ public class Main extends ListenerAdapter {
                 return;
             }
             ud.balance += ud.rakeback;
+            double claimed = ud.rakeback;
             ud.rakeback = 0;
             saveUserData(event.getUser().getId(), ud);
-            event.reply("Rakeback claimed!").setEphemeral(true).queue();
+            event.reply("Successfully claimed **" + String.format("%.2fM", claimed) + "** rakeback!").setEphemeral(true).queue();
         } else if (id.equals("redeem_code")) {
-            event.replyModal(Modal.create("modal_redeem", "Redeem")
-                    .addActionRows(ActionRow.of(TextInput.create("promo_code", "Code", TextInputStyle.SHORT).build())).build()).queue();
+            event.replyModal(Modal.create("modal_redeem", "Redeem Promo Code")
+                    .addActionRows(ActionRow.of(TextInput.create("promo_code", "Code", TextInputStyle.SHORT).setPlaceholder("Enter code here...").build())).build()).queue();
         }
     }
 
@@ -137,38 +138,64 @@ public class Main extends ListenerAdapter {
             try {
                 double amt = Double.parseDouble(event.getValue("amount").getAsString().toLowerCase().replace("m", ""));
                 UserData ud = getUserData(p[3]);
-                if (p[2].equals("Credit")) { ud.balance += amt; ud.totalCredited += amt; } else ud.balance -= amt;
+                if (p[2].equals("Credit")) { 
+                    ud.balance += amt; 
+                    ud.totalCredited += amt; 
+                } else {
+                    ud.balance -= amt;
+                }
                 saveUserData(p[3], ud);
-                event.reply("Wallet updated!").setEphemeral(true).queue();
-            } catch (Exception e) { event.reply("Invalid amount!").setEphemeral(true).queue(); }
+                event.reply("✅ Wallet updated for user! New Balance: **" + String.format("%.2fM", ud.balance) + "**").setEphemeral(true).queue();
+            } catch (Exception e) { 
+                event.reply("❌ Invalid amount format!").setEphemeral(true).queue(); 
+            }
         } else if (event.getModalId().equals("modal_redeem")) {
             UserData ud = getUserData(event.getUser().getId());
-            if (ud.hasRedeemed) { event.reply("Already used!").setEphemeral(true).queue(); return; }
-            if (event.getValue("promo_code").getAsString().equalsIgnoreCase("free10")) {
-                ud.balance += 10; ud.hasRedeemed = true;
+            if (ud.hasRedeemed) { 
+                event.reply("❌ You have already redeemed your one-time code!").setEphemeral(true).queue(); 
+                return; 
+            }
+            String code = event.getValue("promo_code").getAsString();
+            if (code.equalsIgnoreCase("free10")) {
+                ud.balance += 10; 
+                ud.hasRedeemed = true;
                 saveUserData(event.getUser().getId(), ud);
-                event.reply("Success! 10M added.").setEphemeral(true).queue();
-            } else { event.reply("Invalid code!").setEphemeral(true).queue(); }
+                event.reply("✅ Success! **10.00M** has been added to your wallet.").setEphemeral(true).queue();
+            } else { 
+                event.reply("❌ Invalid or expired promo code!").setEphemeral(true).queue(); 
+            }
         }
     }
 
     private EmbedBuilder buildCleanEmbed(User u, UserData d) {
-        return new EmbedBuilder().setAuthor(u.getName() + "'s Wallet", null, u.getEffectiveAvatarUrl())
-                .setColor(new Color(43, 45, 49))
+        return new EmbedBuilder()
+                .setAuthor(u.getName() + "'s Wallet", null, u.getEffectiveAvatarUrl())
+                .setColor(new Color(43, 45, 49)) // Discord Dark Theme Color
                 .addField("💰 Balance", "```" + String.format("%.2fM", d.balance) + "```", true)
                 .addField("🎲 Wagered", "```" + String.format("%.2fM", d.wagered) + "```", true)
                 .addField("⭐ Rakeback", "```" + String.format("%.2fM", d.rakeback) + "```", true)
+                .setFooter("Arcade Economy System")
                 .setTimestamp(Instant.now());
     }
 
     private EmbedBuilder buildAdminSecurityEmbed(Member m, UserData d) {
         User u = m.getUser();
         long age = ChronoUnit.DAYS.between(u.getTimeCreated(), OffsetDateTime.now());
-        return new EmbedBuilder().setAuthor(u.getName()).setColor(age < 7 ? Color.RED : Color.GREEN)
-                .addField("💰 Balance", String.format("%.2fM", d.balance), true)
+        Color statusColor = age < 7 ? Color.RED : Color.GREEN;
+        
+        return new EmbedBuilder()
+                .setAuthor("Admin Security Check: " + u.getName(), null, u.getEffectiveAvatarUrl())
+                .setColor(statusColor)
+                .setDescription("Security Rating: " + (age < 7 ? "⚠️ **High Risk (New Account)**" : "✅ **Verified Resident**"))
+                .addField("💰 Current Balance", "**" + String.format("%.2fM", d.balance) + "**", true)
                 .addField("📥 Total Deposited", String.format("%.2fM", d.totalCredited), true)
-                .addField("👤 Account Age", age + " days", true).setTimestamp(Instant.now());
+                .addField("👤 Account Age", age + " days", true)
+                .addField("🎲 Total Wagered", String.format("%.2fM", d.wagered), true)
+                .setTimestamp(Instant.now());
     }
 
-    public static class UserData { public double balance, rakeback, totalCredited, wagered; public boolean hasRedeemed = false; }
+    public static class UserData { 
+        public double balance = 0, rakeback = 0, totalCredited = 0, wagered = 0; 
+        public boolean hasRedeemed = false; 
+    }
 }
