@@ -41,28 +41,45 @@ public class Main extends ListenerAdapter {
     public static final double RAKEBACK_PERCENTAGE = 0.006;
 
     public static void main(String[] args) {
-        Dotenv dotenv = Dotenv.load();
+        // FIX: Railway handles env vars differently, ignore if .env file is missing
+        Dotenv dotenv = Dotenv.configure().ignoreIfMissing().load();
+        
         loadData();
-        JDABuilder.createDefault(dotenv.get("DISCORD_BOT_TOKEN"))
-                .enableIntents(GatewayIntent.GUILD_MESSAGES, GatewayIntent.GUILD_MEMBERS)
+
+        // Priority 1: Railway Environment Variable | Priority 2: .env file
+        String token = System.getenv("BOT_TOKEN");
+        if (token == null || token.isEmpty()) {
+            token = dotenv.get("DISCORD_BOT_TOKEN");
+        }
+
+        if (token == null || token.isEmpty()) {
+            System.err.println("CRITICAL ERROR: BOT_TOKEN is missing! Please set it in Railway Variables.");
+            return;
+        }
+
+        JDABuilder.createDefault(token)
+                .enableIntents(GatewayIntent.GUILD_MESSAGES, GatewayIntent.GUILD_MEMBERS, GatewayIntent.MESSAGE_CONTENT)
                 .addEventListeners(new Main(), new Flowerpoker(), new Hotcold())
                 .build()
                 .updateCommands().addCommands(
                         Commands.slash("wallet", "Check your arcade wallet"),
-                        Commands.slash("getwallet", "Admin: Security Check & Management").addOption(OptionType.USER, "user", "Target user", true).setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.ADMINISTRATOR)),
-                        Commands.slash("fp", "Staff: Host Flower Poker").addOption(OptionType.CHANNEL, "channel", "Select channel", true).setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.ADMINISTRATOR)),
-                        Commands.slash("hc", "Staff: Host Hot Cold").addOption(OptionType.CHANNEL, "channel", "Select channel", true).setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.ADMINISTRATOR))
+                        Commands.slash("getwallet", "Admin: Security Check & Management")
+                                .addOption(OptionType.USER, "user", "Target user", true)
+                                .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.ADMINISTRATOR)),
+                        Commands.slash("fp", "Staff: Host Flower Poker")
+                                .addOption(OptionType.CHANNEL, "channel", "Select channel", true)
+                                .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.ADMINISTRATOR)),
+                        Commands.slash("hc", "Staff: Host Hot Cold")
+                                .addOption(OptionType.CHANNEL, "channel", "Select channel", true)
+                                .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.ADMINISTRATOR))
                 ).queue();
+        
+        System.out.println("Bot is starting...");
     }
 
-    /**
-     * Utility method to update wager and rakeback.
-     * Call this from Flowerpoker or Hotcold whenever a bet is placed.
-     */
     public static void updateWagerAndRakeback(String userId, double betAmount) {
         UserData ud = database.computeIfAbsent(userId, k -> new UserData());
         ud.wagered += betAmount;
-        // Calculation: 1000M -> 6M means 0.6% or 0.006 multiplier
         ud.rakeback += (betAmount * RAKEBACK_PERCENTAGE);
         saveData();
     }
@@ -88,10 +105,10 @@ public class Main extends ListenerAdapter {
         String id = event.getComponentId();
         if (id.startsWith("admin_")) {
             String type = id.contains("credit") ? "Credit" : "Debit";
-            event.replyModal(Modal.create("modal_admin_" + type + "_" + id.split("_")[2], type).addActionRows(ActionRow.of(TextInput.create("amount", "Amount", TextInputStyle.SHORT).build())).build()).queue();
+            event.replyModal(Modal.create("modal_admin_" + type + "_" + id.split("_")[2], type)
+                    .addActionRows(ActionRow.of(TextInput.create("amount", "Amount", TextInputStyle.SHORT).build())).build()).queue();
         } else if (id.equals("claim_rakeback")) {
             UserData ud = database.get(event.getUser().getId());
-            // Minimum claim 0.01M
             if (ud == null || ud.rakeback < 0.01) {
                 event.reply("Error: You need at least 0.01M rakeback to claim.").setEphemeral(true).queue();
                 return;
@@ -102,7 +119,8 @@ public class Main extends ListenerAdapter {
             saveData();
             event.reply("Successfully claimed " + String.format("%.2f", amount) + "M rakeback!").setEphemeral(true).queue();
         } else if (id.equals("redeem_code")) {
-            event.replyModal(Modal.create("modal_redeem", "Redeem Code").addActionRows(ActionRow.of(TextInput.create("promo_code", "Enter Code", TextInputStyle.SHORT).build())).build()).queue();
+            event.replyModal(Modal.create("modal_redeem", "Redeem Code")
+                    .addActionRows(ActionRow.of(TextInput.create("promo_code", "Enter Code", TextInputStyle.SHORT).build())).build()).queue();
         }
     }
 
@@ -149,8 +167,24 @@ public class Main extends ListenerAdapter {
                 .addField("🆔 User ID", "```" + u.getId() + "```", false).setTimestamp(Instant.now());
     }
 
-    public static void saveData() { try (Writer w = new FileWriter(DB_FILE)) { gson.toJson(database, w); } catch (Exception ignored) {} }
-    private static void loadData() { File f = new File(DB_FILE); if (f.exists()) { try (Reader r = new FileReader(f)) { database = gson.fromJson(r, new TypeToken<HashMap<String, UserData>>(){}.getType()); } catch (Exception ignored) {} } }
+    public static void saveData() { 
+        try (Writer w = new FileWriter(DB_FILE)) { 
+            gson.toJson(database, w); 
+        } catch (Exception e) {
+            System.err.println("Could not save database: " + e.getMessage());
+        } 
+    }
+    
+    private static void loadData() { 
+        File f = new File(DB_FILE); 
+        if (f.exists()) { 
+            try (Reader r = new FileReader(f)) { 
+                database = gson.fromJson(r, new TypeToken<HashMap<String, UserData>>(){}.getType()); 
+            } catch (Exception e) {
+                System.err.println("Could not load database: " + e.getMessage());
+            } 
+        } 
+    }
 
     public static class UserData { public double balance, rakeback, totalCredited, wagered; public boolean hasRedeemed = false; }
 }
