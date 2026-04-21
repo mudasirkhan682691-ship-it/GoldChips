@@ -117,8 +117,19 @@ public class Hotcold extends ListenerAdapter {
         if (isProcessing) return;
         isProcessing = true;
 
-        String[] allPossible = {"red", "orange", "yellow", "blue", "assorted", "purple", "rainbow"};
-        String rolled = allPossible[new Random().nextInt(allPossible.length)];
+        String rolled;
+        Random r = new Random();
+        int chance = r.nextInt(100); // 0 to 99
+
+        // --- Rare Rainbow Logic ---
+        if (chance < 3) { // 3% chance for Rainbow
+            rolled = "rainbow";
+        } else {
+            // Remaining 97% distributed between Hot and Cold flowers
+            String[] hotColdFlowers = {"red", "orange", "yellow", "blue", "assorted", "purple"};
+            rolled = hotColdFlowers[r.nextInt(hotColdFlowers.size())];
+        }
+
         String winningSide = determineSide(rolled);
 
         if (streak.size() >= 5) streak.removeFirst();
@@ -133,7 +144,6 @@ public class Hotcold extends ListenerAdapter {
             Main.UserData ud = Main.getUserData(b.userId);
 
             if (b.side.equals(winningSide)) {
-                // Fixed Payout Multipliers: Hot 2.0x, Cold 2.1x, Rainbow 12.0x
                 double mult = winningSide.equals("hot") ? 2.0 : (winningSide.equals("cold") ? 2.1 : 12.0);
                 double winAmt = b.amount * mult;
                 ud.balance += winAmt;
