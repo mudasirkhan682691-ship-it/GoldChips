@@ -35,7 +35,7 @@ public class Flowerpoker extends ListenerAdapter {
     @Override
     public void onSlashCommandInteraction(SlashCommandInteractionEvent event) {
         if (event.getName().equals("fp")) {
-            event.reply("✅ Flower Poker Session Started!").setEphemeral(true).queue();
+            event.reply("Session Started!").setEphemeral(true).queue();
             startNewRound(event.getOption("channel").getAsChannel().asTextChannel());
         }
     }
@@ -44,15 +44,9 @@ public class Flowerpoker extends ListenerAdapter {
     public void onButtonInteraction(ButtonInteractionEvent event) {
         String id = event.getComponentId();
         if (id.startsWith("bet_")) {
-            if (!isBettingOpen) { 
-                event.reply("❌ Betting is currently closed for this round!").setEphemeral(true).queue(); 
-                return; 
-            }
-            String side = id.split("_")[1];
-            event.replyModal(Modal.create("m_bet_" + side, "Place Your Bet")
-                    .addActionRows(ActionRow.of(TextInput.create("amt", "Amount to Bet (M)", TextInputStyle.SHORT)
-                            .setPlaceholder("e.g. 5 or 10.5")
-                            .setRequired(true).build())).build()).queue();
+            if (!isBettingOpen) { event.reply("Round ended! Wait for next.").setEphemeral(true).queue(); return; }
+            event.replyModal(Modal.create("m_bet_" + id.split("_")[1], "Place Bet")
+                    .addActionRows(ActionRow.of(TextInput.create("amt", "Amount (M)", TextInputStyle.SHORT).build())).build()).queue();
         }
     }
 
@@ -64,9 +58,7 @@ public class Flowerpoker extends ListenerAdapter {
                 double amt = Double.parseDouble(event.getValue("amt").getAsString().toLowerCase().replace("m", ""));
                 String userId = event.getUser().getId();
 
-                if (amt <= 0) { event.reply("❌ Amount must be greater than 0!").setEphemeral(true).queue(); return; }
-
-                // Prevent double side betting
+                // Double side check
                 for (Bet b : currentBets) {
                     if (!b.isFake && b.userId.equals(userId)) {
                         if ((sideRaw.equals("player") && b.side.equals("house")) ||
@@ -77,14 +69,11 @@ public class Flowerpoker extends ListenerAdapter {
                     }
                 }
 
-                // Check Balance from MongoDB
+                // Use Main.java MongoDB helpers
                 Main.UserData ud = Main.getUserData(userId);
-                if (ud.balance < amt) { 
-                    event.reply("❌ Insufficient Balance! You have: " + String.format("%.2fM", ud.balance)).setEphemeral(true).queue(); 
-                    return; 
-                }
+                if (ud.balance < amt) { event.reply("Error: Insufficient Balance.").setEphemeral(true).queue(); return; }
 
-                // Deduct Balance and Update Stats
+                // Update data in MongoDB
                 ud.balance -= amt;
                 Main.saveUserData(userId, ud);
                 Main.updateWagerAndRakeback(userId, amt);
@@ -92,27 +81,23 @@ public class Flowerpoker extends ListenerAdapter {
                 currentBets.add(new Bet(userId, sideRaw, amt, false));
 
                 String sideDisplay = sideRaw.substring(0, 1).toUpperCase() + sideRaw.substring(1);
-                event.reply(String.format("✅ **Bet Placed!**\nAmount: `%.2fM`\nSide: `%s`", amt, sideDisplay)).setEphemeral(true).queue();
+                event.reply(String.format("✅ **Bet Placed!** Amount: `%.2fM` | Side: `%s`", amt, sideDisplay))
+                        .setEphemeral(true).queue();
 
                 if (!isTimerStarted) startCountdown(event.getChannel().asTextChannel());
 
-            } catch (Exception e) { 
-                event.reply("❌ Invalid Amount! Please enter a number.").setEphemeral(true).queue(); 
-            }
+            } catch (Exception e) { event.reply("Error: Invalid Amount.").setEphemeral(true).queue(); }
         }
     }
 
     private void startNewRound(TextChannel channel) {
-        isBettingOpen = true; 
-        isProcessing = false; 
-        isTimerStarted = false;
+        isBettingOpen = true; isProcessing = false; isTimerStarted = false;
         currentBets.clear();
-        
-        // Visual Fake Bets to make it look active
         Random r = new Random();
-        currentBets.add(new Bet(genId(), "player", 1 + r.nextInt(10), true));
-        currentBets.add(new Bet(genId(), "house", 1 + r.nextInt(10), true));
-        
+        // Visual padding for empty rounds
+        currentBets.add(new Bet(genId(), "tie", 1 + r.nextInt(50), true));
+        currentBets.add(new Bet(genId(), "player", 1 + r.nextInt(50), true));
+        currentBets.add(new Bet(genId(), "house", 1 + r.nextInt(50), true));
         sendBettingEmbed(channel, false);
     }
 
@@ -120,22 +105,15 @@ public class Flowerpoker extends ListenerAdapter {
         isTimerStarted = true;
         sendBettingEmbed(channel, true);
         Main.scheduler.schedule(() -> {
-            if (isBettingOpen) { 
-                isBettingOpen = false; 
-                processResults(channel); 
-            }
+            if (isBettingOpen) { isBettingOpen = false; processResults(channel); }
         }, 45, TimeUnit.SECONDS);
     }
 
     private void processResults(TextChannel channel) {
         if (isProcessing) return;
         isProcessing = true;
-
-        List<Integer> pHand = genHand(); 
-        List<Integer> hHand = genHand();
-        HandRank pRank = eval(pHand); 
-        HandRank hRank = eval(hHand);
-        
+        List<Integer> pHand = genHand(); List<Integer> hHand = genHand();
+        HandRank pRank = eval(pHand); HandRank hRank = eval(hHand);
         String winner = pRank.score > hRank.score ? "player" : (hRank.score > pRank.score ? "house" : "tie");
 
         if (streak.size() >= 5) streak.removeFirst();
@@ -153,35 +131,36 @@ public class Flowerpoker extends ListenerAdapter {
         for (Map.Entry<String, List<Bet>> entry : userBets.entrySet()) {
             String uId = entry.getKey();
             List<Bet> bets = entry.getValue();
-            Main.UserData ud = Main.getUserData(uId); 
+            Main.UserData ud = Main.getUserData(uId);
 
             boolean hasTieBet = bets.stream().anyMatch(b -> b.side.equals("tie"));
             double totalLostAmt = 0;
+            boolean wonThisRound = false;
 
             for (Bet b : bets) {
                 if (winner.equals("tie")) {
                     if (b.side.equals("tie")) {
                         double winAmt = b.amount * 2.8;
                         ud.balance += winAmt;
-                        payoutList.append("<@").append(uId).append("> WON **").append(String.format("%.2f", winAmt)).append("M** (Tie x2.8)\n");
-                        anybodyWonRealMoney = true;
+                        payoutList.append("<@").append(uId).append("> WON **").append(String.format("%.2f", winAmt)).append("M**\n");
+                        anybodyWonRealMoney = true; wonThisRound = true;
                     } else if (!hasTieBet) {
-                        ud.balance += b.amount; // Refund
+                        ud.balance += b.amount;
                         payoutList.append("<@").append(uId).append("> REFUNDED **").append(String.format("%.2f", b.amount)).append("M**\n");
-                        anybodyWonRealMoney = true;
+                        wonThisRound = true;
                     } else { totalLostAmt += b.amount; }
                 }
                 else if (b.side.equals(winner)) {
                     double winAmt = b.amount * 1.9;
                     ud.balance += winAmt;
                     payoutList.append("<@").append(uId).append("> WON **").append(String.format("%.2f", winAmt)).append("M**\n");
-                    anybodyWonRealMoney = true;
-                } else { 
-                    totalLostAmt += b.amount; 
+                    anybodyWonRealMoney = true; wonThisRound = true;
+                } else {
+                    totalLostAmt += b.amount;
                 }
             }
             
-            Main.saveUserData(uId, ud); 
+            Main.saveUserData(uId, ud); // Save winner/refunder back to MongoDB
 
             if (totalLostAmt > 0) {
                 loserList.append("<@").append(uId).append("> LOST **").append(String.format("%.2f", totalLostAmt)).append("M**\n");
@@ -194,50 +173,43 @@ public class Flowerpoker extends ListenerAdapter {
                 .setColor(anybodyWonRealMoney ? Color.GREEN : (winner.equals("tie") ? Color.WHITE : Color.RED))
                 .setDescription(String.format(
                         "**Player:** %s (%s)\n" +
-                        "**House:** %s (%s)\n\n" +
-                        "**Result:** %s vs %s\n" +
-                        "### %s WINS!",
+                                "**House:** %s (%s)\n\n" +
+                                "**Result:** %s vs %s\n" +
+                                "# %s WINS!",
                         format(pHand), pRank.name, format(hHand), hRank.name, pRank.name, hRank.name, winner.toUpperCase()
                 ));
 
         if (anybodyWonRealMoney) rb.addField("", payoutList.toString(), false);
         if (anybodyLost) rb.addField("", loserList.toString(), false);
-        if (!anybodyWonRealMoney && !anybodyLost) rb.addField("", "*No real players in this round.*", false);
+        if (!anybodyWonRealMoney && !anybodyLost) rb.addField("", "*No active players.*", false);
 
-        rb.setFooter("Arcade Flower Poker").setTimestamp(Instant.now());
-        
+        rb.setTimestamp(Instant.now());
         if (lastBettingMessage != null) lastBettingMessage.delete().queue(null, t -> {});
-        
-        channel.sendMessageEmbeds(rb.build()).queue(s -> 
-            Main.scheduler.schedule(() -> startNewRound(channel), 6, TimeUnit.SECONDS)
-        );
+        channel.sendMessageEmbeds(rb.build()).queue(s -> Main.scheduler.schedule(() -> startNewRound(channel), 6, TimeUnit.SECONDS));
     }
 
     private void sendBettingEmbed(TextChannel channel, boolean withTimer) {
-        String timeDisplay = withTimer ? String.format("<t:%d:R>", (System.currentTimeMillis() / 1000) + 45) : "Waiting for first bet...";
+        String timeDisplay = withTimer ? String.format("<t:%d:R>", (System.currentTimeMillis() / 1000) + 45) : "Waiting for bets...";
         EmbedBuilder eb = new EmbedBuilder()
                 .setAuthor("Play Flower Poker", null, channel.getGuild().getIconUrl())
-                .setColor(new Color(255, 105, 180)) // Pinkish
+                .setColor(new Color(255, 105, 180))
                 .setDescription(String.format(
-                        "**▸ Round Timer:** %s\n" +
-                        "**▸ Multiplier (P/H):** `x1.9`\n" +
-                        "**▸ Multiplier (Tie):** `x2.8`\n" +
-                        "**▸ Last 5:** %s\n\n" +
-                        "Use buttons below to join the game!",
+                        "**▸ Next Game Time:** %s\n" +
+                                "**▸ Multiplier (Player/House):** `x1.9`\n" +
+                                "**▸ Multiplier (Tie):** `x2.8`\n" +
+                                "**▸ Current Streak:** %s\n\n" +
+                                "Click a button below to bet!",
                         timeDisplay, (streak.isEmpty() ? "None" : String.join(", ", streak))
                 ))
-                .setFooter("Minimum Bet: 0.01M")
+                .setFooter("Hosted by Staff")
                 .setTimestamp(Instant.now());
 
-        if (withTimer && lastBettingMessage != null) {
-            lastBettingMessage.editMessageEmbeds(eb.build()).queue();
-        } else {
-            channel.sendMessageEmbeds(eb.build()).addActionRow(
-                    Button.success("bet_player", "Bet Player"),
-                    Button.danger("bet_house", "Bet House"),
-                    Button.primary("bet_tie", "Bet Tie")
-            ).queue(msg -> lastBettingMessage = msg);
-        }
+        if (withTimer && lastBettingMessage != null) lastBettingMessage.editMessageEmbeds(eb.build()).queue();
+        else channel.sendMessageEmbeds(eb.build()).addActionRow(
+                Button.success("bet_player", "Bet on Player"),
+                Button.danger("bet_house", "Bet on House"),
+                Button.primary("bet_tie", "Bet on Tie")
+        ).queue(msg -> lastBettingMessage = msg);
     }
 
     private List<Integer> genHand() { return new Random().ints(5, 1, 8).boxed().collect(Collectors.toList()); }
@@ -256,12 +228,6 @@ public class Flowerpoker extends ListenerAdapter {
         return new HandRank(0, "Bust");
     }
 
-    private static class Bet { 
-        String userId, side; double amount; boolean isFake; 
-        Bet(String u, String s, double a, boolean f) { userId=u; side=s; amount=a; isFake=f; } 
-    }
-    private static class HandRank { 
-        int score; String name; 
-        HandRank(int s, String n) { score=s; name=n; } 
-    }
+    private static class Bet { String userId, side; double amount; boolean isFake; Bet(String u, String s, double a, boolean f) { userId=u; side=s; amount=a; isFake=f; } }
+    private static class HandRank { int score; String name; HandRank(int s, String n) { score=s; name=n; } }
 }
