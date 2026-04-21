@@ -70,13 +70,14 @@ public class Flowerpoker extends ListenerAdapter {
                     }
                 }
 
-                // Database logic switched to MongoDB Atlas
+                // Integration with MongoDB via Main.java
                 Main.UserData ud = Main.getUserData(userId);
                 if (ud.balance < amt) { event.reply("Error: Insufficient Balance.").setEphemeral(true).queue(); return; }
 
+                // Update Balance and Cloud Save
                 ud.balance -= amt;
-                Main.saveUserData(userId, ud); // Instant cloud save
-                Main.updateWagerAndRakeback(userId, amt); // Instant stat update
+                Main.saveUserData(userId, ud); 
+                Main.updateWagerAndRakeback(userId, amt);
 
                 currentBets.add(new Bet(userId, sideRaw, amt, false));
 
@@ -160,7 +161,7 @@ public class Flowerpoker extends ListenerAdapter {
                 }
             }
             
-            Main.saveUserData(uId, ud); // Cloud save for results
+            Main.saveUserData(uId, ud); // Save result to MongoDB
 
             if (!userProcessed || totalLostAmt > 0) {
                 if (totalLostAmt > 0) {
