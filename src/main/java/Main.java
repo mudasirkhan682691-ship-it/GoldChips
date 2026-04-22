@@ -1,3 +1,6 @@
+ye mere discord bot ki Main.java file hai iske hisab sy 1 new file bana den Cashier.java name ki mein usme advance coding kro ga toh jo jo coding Main.java me zaroori hain uske hisab sy kr do meri ye Main.java file github + railway  +mangodb ke zariye live hai aur bhe files hain discord bot chl rha hai withraw / deposit ka custom setup krna hai advance coding ke liye file bana do baad me kabhi bhe Main.java me update na krni pry Cashier.java ke liye
+
+
 import io.github.cdimascio.dotenv.Dotenv;
 import com.mongodb.client.*;
 import com.mongodb.client.model.ReplaceOptions;
