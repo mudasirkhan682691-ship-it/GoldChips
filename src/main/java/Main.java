@@ -60,7 +60,7 @@ public class Main extends ListenerAdapter {
                 .addEventListeners(new Main(), new Flowerpoker(), new Hotcold())
                 .build()
                 .updateCommands().addCommands(
-                        Commands.slash("wallet", "Check your arcade wallet"),
+                        Commands.slash("wallet", "Check your gold chips wallet"),
                         Commands.slash("getwallet", "Admin: Security Check & Management")
                                 .addOption(OptionType.USER, "user", "Target user", true)
                                 .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.ADMINISTRATOR)),
