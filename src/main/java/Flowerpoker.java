@@ -20,10 +20,10 @@ import java.util.stream.Collectors;
 public class Flowerpoker extends ListenerAdapter {
 
     private static final Map<Integer, String> FLOWERS = Map.of(
-            1,"<:mixed:1495282804534153296>", 2,"<:assorted:1495283043299233802>",
-            3,"<:blue:1495282922809327827>", 4,"<:orange:1495282953507311646>",
-            5,"<:purple:1495283008251494410>", 6,"<:red:1495282842329022494>",
-            7,"<:yellow:1495282879704469594>");
+            1,"<:mixed:1496424200288862260>", 2,"<:assorted:1496424438953017375>",
+            3,"<:blue:1496424324066971668>", 4,"<:orange:1496424381537194175>",
+            5,"<:purple:1496424408737251328>", 6,"<:red:1496424239450820608>",
+            7,"<:yellow:1496424271403290806>");
 
     private String hostId = null;
     private Message lastBettingMessage = null;
