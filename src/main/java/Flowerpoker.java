@@ -5,6 +5,7 @@ import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEve
 import net.dv8tion.jda.api.events.interaction.component.ButtonInteractionEvent;
 import net.dv8tion.jda.api.events.interaction.ModalInteractionEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
+import net.dv8tion.jda.api.interactions.commands.OptionMapping; // Added
 import net.dv8tion.jda.api.interactions.components.ActionRow;
 import net.dv8tion.jda.api.interactions.components.buttons.Button;
 import net.dv8tion.jda.api.interactions.components.text.TextInput;
@@ -37,8 +38,13 @@ public class Flowerpoker extends ListenerAdapter {
     public void onSlashCommandInteraction(SlashCommandInteractionEvent event) {
         if (event.getName().equals("fp")) {
             hostId = event.getUser().getId();
-            event.reply("Session Started!").setEphemeral(true).queue();
-            startNewRound(event.getOption("channel").getAsChannel().asTextChannel());
+            OptionMapping channelOpt = event.getOption("channel");
+            if (channelOpt != null && channelOpt.getAsChannel() instanceof TextChannel) {
+                event.reply("Session Started!").setEphemeral(true).queue();
+                startNewRound((TextChannel) channelOpt.getAsChannel());
+            } else {
+                event.reply("❌ Please select a valid Text Channel.").setEphemeral(true).queue();
+            }
         }
     }
 
@@ -47,8 +53,12 @@ public class Flowerpoker extends ListenerAdapter {
         String id = event.getComponentId();
         if (id.startsWith("bet_")) {
             if (!isBettingOpen) { event.reply("Round ended!").setEphemeral(true).queue(); return; }
-            event.replyModal(Modal.create("m_bet_" + id.split("_")[1], "Place Bet")
-                    .addActionRows(ActionRow.of(TextInput.create("amt", "Amount (M)", TextInputStyle.SHORT).build())).build()).queue();
+            String side = id.split("_")[1];
+            event.replyModal(Modal.create("m_bet_" + side, "Place Bet on " + side.toUpperCase())
+                    .addActionRows(ActionRow.of(TextInput.create("amt", "Amount (M)", TextInputStyle.SHORT)
+                            .setPlaceholder("e.g. 10")
+                            .setRequired(true)
+                            .build())).build()).queue();
         }
     }
 
@@ -57,38 +67,39 @@ public class Flowerpoker extends ListenerAdapter {
         if (event.getModalId().startsWith("m_bet_")) {
             try {
                 String sideRaw = event.getModalId().split("_")[2];
-                double amt = Double.parseDouble(event.getValue("amt").getAsString().toLowerCase().replace("m", ""));
+                String amtInput = event.getValue("amt").getAsString().toLowerCase().replace("m", "").trim();
+                double amt = Double.parseDouble(amtInput);
                 String userId = event.getUser().getId();
+
+                if (amt <= 0) { event.reply("❌ Amount must be positive.").setEphemeral(true).queue(); return; }
 
                 for (Bet b : currentBets) {
                     if (!b.isFake && b.userId.equals(userId)) {
                         if ((sideRaw.equals("player") && b.side.equals("house")) ||
                                 (sideRaw.equals("house") && b.side.equals("player"))) {
-                            event.reply("❌ You cannot bet on both **Player** and **House** in the same round!").setEphemeral(true).queue();
+                            event.reply("❌ You cannot bet on both **Player** and **House**!").setEphemeral(true).queue();
                             return;
                         }
                     }
                 }
 
-                // Integration with MongoDB via Main.java
                 Main.UserData ud = Main.getUserData(userId);
-                if (ud.balance < amt) { event.reply("Error: Insufficient Balance.").setEphemeral(true).queue(); return; }
+                if (ud.balance < amt) { event.reply("❌ Error: Insufficient Balance.").setEphemeral(true).queue(); return; }
 
-                // Update Balance and Cloud Save
                 ud.balance -= amt;
                 Main.saveUserData(userId, ud); 
-                Main.updateWagerAndRakeback(userId, amt);
+                // Note: Ensure this method exists in Main.java
+                // Main.updateWagerAndRakeback(userId, amt); 
 
                 currentBets.add(new Bet(userId, sideRaw, amt, false));
 
                 String sideDisplay = sideRaw.substring(0, 1).toUpperCase() + sideRaw.substring(1);
                 event.reply(String.format("✅ **Bet Placed!** Amount: `%.2fM` | Side: `%s`", amt, sideDisplay))
-                        .setEphemeral(true)
-                        .queue(hook -> hook.deleteOriginal().queueAfter(5, TimeUnit.SECONDS));
+                        .setEphemeral(true).queue();
 
                 if (!isTimerStarted) startCountdown(event.getChannel().asTextChannel());
 
-            } catch (Exception e) { event.reply("Error: Invalid Amount.").setEphemeral(true).queue(); }
+            } catch (Exception e) { event.reply("❌ Error: Invalid Amount Format.").setEphemeral(true).queue(); }
         }
     }
 
@@ -106,7 +117,10 @@ public class Flowerpoker extends ListenerAdapter {
         isTimerStarted = true;
         sendBettingEmbed(channel, true);
         Main.scheduler.schedule(() -> {
-            if (isBettingOpen) { isBettingOpen = false; processResults(channel); }
+            if (isBettingOpen) { 
+                isBettingOpen = false; 
+                processResults(channel); 
+            }
         }, 45, TimeUnit.SECONDS);
     }
 
@@ -135,7 +149,6 @@ public class Flowerpoker extends ListenerAdapter {
             Main.UserData ud = Main.getUserData(uId);
 
             boolean hasTieBet = bets.stream().anyMatch(b -> b.side.equals("tie"));
-            boolean userProcessed = false;
             double totalLostAmt = 0;
 
             for (Bet b : bets) {
@@ -144,30 +157,28 @@ public class Flowerpoker extends ListenerAdapter {
                         double winAmt = b.amount * 2.8;
                         ud.balance += winAmt;
                         payoutList.append("<@").append(uId).append("> WON **").append(String.format("%.2f", winAmt)).append("M**\n");
-                        anybodyWonRealMoney = true; userProcessed = true;
+                        anybodyWonRealMoney = true;
                     } else if (!hasTieBet) {
                         ud.balance += b.amount;
                         payoutList.append("<@").append(uId).append("> REFUNDED **").append(String.format("%.2f", b.amount)).append("M**\n");
-                        userProcessed = true;
+                        anybodyWonRealMoney = true;
                     } else { totalLostAmt += b.amount; }
                 }
                 else if (b.side.equals(winner)) {
                     double winAmt = b.amount * 1.9;
                     ud.balance += winAmt;
                     payoutList.append("<@").append(uId).append("> WON **").append(String.format("%.2f", winAmt)).append("M**\n");
-                    anybodyWonRealMoney = true; userProcessed = true;
+                    anybodyWonRealMoney = true;
                 } else {
                     totalLostAmt += b.amount;
                 }
             }
             
-            Main.saveUserData(uId, ud); // Save result to MongoDB
+            Main.saveUserData(uId, ud); 
 
-            if (!userProcessed || totalLostAmt > 0) {
-                if (totalLostAmt > 0) {
-                    loserList.append("<@").append(uId).append("> LOST **").append(String.format("%.2f", totalLostAmt)).append("M**\n");
-                    anybodyLost = true;
-                }
+            if (totalLostAmt > 0) {
+                loserList.append("<@").append(uId).append("> LOST **").append(String.format("%.2f", totalLostAmt)).append("M**\n");
+                anybodyLost = true;
             }
         }
 
@@ -178,9 +189,9 @@ public class Flowerpoker extends ListenerAdapter {
                 .setColor(sidebarColor)
                 .setDescription(String.format(
                         "**Player:** %s (%s)\n" +
-                                "**House:** %s (%s)\n\n" +
-                                "**Result:** %s vs %s\n" +
-                                "# %s WINS!",
+                        "**House:** %s (%s)\n\n" +
+                        "**Result:** %s vs %s\n" +
+                        "# %s WINS!",
                         format(pHand), pRank.name, format(hHand), hRank.name, pRank.name, hRank.name, winner.toUpperCase()
                 ));
 
@@ -200,21 +211,31 @@ public class Flowerpoker extends ListenerAdapter {
                 .setColor(new Color(255, 105, 180))
                 .setDescription(String.format(
                         "**▸ Next Game Time:** %s\n" +
-                                "**▸ Payout Multiplier (Player/House):** `x1.9`\n" +
-                                "**▸ Payout Multiplier (Tie):** `x2.8`\n" +
-                                "**▸ Current Streak:** %s\n\n" +
-                                "Click a button bellow to bet on **Player**, **House** or **Tie**! Games are automatically launched every 45 seconds",
+                        "**▸ Payout Multiplier (Player/House):** `x1.9`\n" +
+                        "**▸ Payout Multiplier (Tie):** `x2.8`\n" +
+                        "**▸ Current Streak:** %s\n\n" +
+                        "Click a button below to bet! Games launch every 45s.",
                         timeDisplay, (streak.isEmpty() ? "None" : String.join(", ", streak))
                 ))
-                .setFooter("Hosted by Staff")
+                .setFooter("Global Arcade Casino")
                 .setTimestamp(Instant.now());
 
-        if (withTimer && lastBettingMessage != null) lastBettingMessage.editMessageEmbeds(eb.build()).queue();
-        else channel.sendMessageEmbeds(eb.build()).addActionRow(
-                Button.success("bet_player", "Bet on Player"),
-                Button.danger("bet_house", "Bet on House"),
-                Button.primary("bet_tie", "Bet on Tie")
-        ).queue(msg -> lastBettingMessage = msg);
+        if (withTimer && lastBettingMessage != null) {
+            lastBettingMessage.editMessageEmbeds(eb.build()).queue(null, t -> {
+                // If message deleted, resend
+                channel.sendMessageEmbeds(eb.build()).addActionRow(
+                        Button.success("bet_player", "Bet on Player"),
+                        Button.danger("bet_house", "Bet on House"),
+                        Button.primary("bet_tie", "Bet on Tie")
+                ).queue(msg -> lastBettingMessage = msg);
+            });
+        } else {
+            channel.sendMessageEmbeds(eb.build()).addActionRow(
+                    Button.success("bet_player", "Bet on Player"),
+                    Button.danger("bet_house", "Bet on House"),
+                    Button.primary("bet_tie", "Bet on Tie")
+            ).queue(msg -> lastBettingMessage = msg);
+        }
     }
 
     private List<Integer> genHand() { return new Random().ints(5, 1, 8).boxed().collect(Collectors.toList()); }
