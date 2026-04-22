@@ -61,23 +61,47 @@ public class Main extends ListenerAdapter {
                 .build()
                 .updateCommands().addCommands(
                         Commands.slash("wallet", "Check your arcade wallet"),
-                        Commands.slash("getwallet", "Admin: Security Check & Management").addOption(OptionType.USER, "user", "Target user", true).setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.ADMINISTRATOR)),
-                        Commands.slash("fp", "Staff: Host Flower Poker").addOption(OptionType.CHANNEL, "channel", "Select channel", true).setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.ADMINISTRATOR)),
-                        Commands.slash("hc", "Staff: Host Hot Cold").addOption(OptionType.CHANNEL, "channel", "Select channel", true).setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.ADMINISTRATOR))
+                        Commands.slash("getwallet", "Admin: Security Check & Management")
+                                .addOption(OptionType.USER, "user", "Target user", true)
+                                .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.ADMINISTRATOR)),
+                        Commands.slash("fp", "Staff: Host Flower Poker")
+                                .addOption(OptionType.CHANNEL, "channel", "Select channel", true)
+                                .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.ADMINISTRATOR)),
+                        Commands.slash("hc", "Staff: Host Hot Cold")
+                                .addOption(OptionType.CHANNEL, "channel", "Select channel", true)
+                                .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.ADMINISTRATOR))
                 ).queue();
         
         System.out.println("🚀 Bot is starting with MongoDB support...");
     }
 
-    // --- Database Helper Methods ---
+    // --- Database Helper Methods (Fixed for Data Loss) ---
 
     public static UserData getUserData(String userId) {
+        if (userCollection == null) {
+            System.err.println("CRITICAL: MongoDB Collection is null. Data cannot be fetched!");
+            return new UserData(); 
+        }
+
         Document doc = userCollection.find(new Document("_id", userId)).first();
-        if (doc == null) return new UserData();
+        if (doc == null) {
+            // New user entry
+            UserData newData = new UserData();
+            saveUserData(userId, newData);
+            return newData;
+        }
         return gson.fromJson(doc.toJson(), UserData.class);
     }
 
     public static void saveUserData(String userId, UserData data) {
+        if (userCollection == null) {
+            System.err.println("CRITICAL: MongoDB Collection is null. Data cannot be saved!");
+            return;
+        }
+        
+        // Ensure balance never becomes negative due to rounding (safety check)
+        if (data.balance < -0.0001) data.balance = 0;
+
         Document doc = Document.parse(gson.toJson(data));
         doc.put("_id", userId); 
         userCollection.replaceOne(new Document("_id", userId), doc, new ReplaceOptions().upsert(true));
@@ -136,11 +160,16 @@ public class Main extends ListenerAdapter {
         if (event.getModalId().startsWith("modal_admin_")) {
             String[] p = event.getModalId().split("_");
             try {
-                double amt = Double.parseDouble(event.getValue("amount").getAsString().toLowerCase().replace("m", ""));
+                double amt = Double.parseDouble(event.getValue("amount").getAsString().toLowerCase().replace("m", "").trim());
                 UserData ud = getUserData(p[3]);
-                if (p[2].equals("Credit")) { ud.balance += amt; ud.totalCredited += amt; } else ud.balance -= amt;
+                if (p[2].equals("Credit")) { 
+                    ud.balance += amt; 
+                    ud.totalCredited += amt; 
+                } else {
+                    ud.balance -= amt;
+                }
                 saveUserData(p[3], ud);
-                event.reply("Wallet Updated!").setEphemeral(true).queue();
+                event.reply("Wallet Updated! New Balance: " + String.format("%.2f", ud.balance) + "M").setEphemeral(true).queue();
             } catch (Exception e) { event.reply("Error! Use numbers only.").setEphemeral(true).queue(); }
         } else if (event.getModalId().equals("modal_redeem")) {
             String code = event.getValue("promo_code").getAsString();
@@ -154,7 +183,7 @@ public class Main extends ListenerAdapter {
         }
     }
 
-    // --- Old UI Embed Builders ---
+    // --- Embed Builders ---
 
     private EmbedBuilder buildCleanEmbed(User u, UserData d) {
         return new EmbedBuilder().setAuthor(u.getName() + "'s Wallet", null, u.getEffectiveAvatarUrl())
@@ -172,13 +201,20 @@ public class Main extends ListenerAdapter {
         return new EmbedBuilder().setAuthor(u.getName(), null, u.getEffectiveAvatarUrl())
                 .setThumbnail(u.getEffectiveAvatarUrl())
                 .setColor(age < 7 ? Color.RED : Color.GREEN)
-                .addField("💰 Current Balance", "```" + String.format("%.2fM", d.balance) + "```", true)
-                .addField("📥 Total Deposited", "```" + String.format("%.2fM", d.totalCredited) + "```", true)
-                .addField("🎲 Total Wagered", "```" + String.format("%.2fM", d.wagered) + "```", true)
-                .addField("👤 Account Age", age + " days", true)
-                .addField("🆔 User ID", "```" + u.getId() + "```", false)
+                .addField("💰 Balance", "```" + String.format("%.2fM", d.balance) + "```", true)
+                .addField("📥 Deposited", "```" + String.format("%.2fM", d.totalCredited) + "```", true)
+                .addField("🎲 Wagered", "```" + String.format("%.2fM", d.wagered) + "```", true)
+                .addField("👤 Age", age + " days", true)
+                .addField("🆔 ID", "```" + u.getId() + "```", false)
                 .setTimestamp(Instant.now());
     }
 
-    public static class UserData { public double balance, rakeback, totalCredited, wagered; public boolean hasRedeemed = false; }
+    // Default class with constructor for safety
+    public static class UserData { 
+        public double balance = 0.0; 
+        public double rakeback = 0.0; 
+        public double totalCredited = 0.0; 
+        public double wagered = 0.0; 
+        public boolean hasRedeemed = false; 
+    }
 }
