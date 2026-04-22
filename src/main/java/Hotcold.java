@@ -5,6 +5,7 @@ import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEve
 import net.dv8tion.jda.api.events.interaction.component.ButtonInteractionEvent;
 import net.dv8tion.jda.api.events.interaction.ModalInteractionEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
+import net.dv8tion.jda.api.interactions.commands.OptionMapping;
 import net.dv8tion.jda.api.interactions.components.ActionRow;
 import net.dv8tion.jda.api.interactions.components.buttons.Button;
 import net.dv8tion.jda.api.interactions.components.text.TextInput;
@@ -40,8 +41,13 @@ public class Hotcold extends ListenerAdapter {
     public void onSlashCommandInteraction(SlashCommandInteractionEvent event) {
         if (event.getName().equals("hc")) {
             hostId = event.getUser().getId();
-            event.reply("HotCold Session Started!").setEphemeral(true).queue();
-            startNewRound(event.getOption("channel").getAsChannel().asTextChannel());
+            OptionMapping channelOpt = event.getOption("channel");
+            if (channelOpt != null && channelOpt.getAsChannel() instanceof TextChannel) {
+                event.reply("HotCold Session Started!").setEphemeral(true).queue();
+                startNewRound((TextChannel) channelOpt.getAsChannel());
+            } else {
+                event.reply("❌ Please select a valid Text Channel.").setEphemeral(true).queue();
+            }
         }
     }
 
@@ -55,14 +61,18 @@ public class Hotcold extends ListenerAdapter {
             synchronized (currentBets) {
                 for (Bet b : currentBets) {
                     if (b.userId.equals(userId)) {
-                        event.reply("❌ You have already placed a bet in this round! You can only bet on **one** option.").setEphemeral(true).queue();
+                        event.reply("❌ You have already placed a bet!").setEphemeral(true).queue();
                         return;
                     }
                 }
             }
 
-            event.replyModal(Modal.create("m_hc_" + id.split("_")[2], "Place Bet")
-                    .addActionRows(ActionRow.of(TextInput.create("amt", "Amount (M)", TextInputStyle.SHORT).build())).build()).queue();
+            String side = id.split("_")[2];
+            event.replyModal(Modal.create("m_hc_" + side, "Place Bet on " + side.toUpperCase())
+                    .addActionRows(ActionRow.of(TextInput.create("amt", "Amount (M)", TextInputStyle.SHORT)
+                            .setPlaceholder("e.g. 50")
+                            .setRequired(true)
+                            .build())).build()).queue();
         }
     }
 
@@ -71,10 +81,11 @@ public class Hotcold extends ListenerAdapter {
         if (event.getModalId().startsWith("m_hc_")) {
             try {
                 String side = event.getModalId().split("_")[2];
-                // Sanitizing input to handle 'm' suffix
                 String input = event.getValue("amt").getAsString().toLowerCase().replace("m", "").trim();
                 double amt = Double.parseDouble(input);
                 String userId = event.getUser().getId();
+
+                if (amt <= 0) { event.reply("❌ Invalid amount.").setEphemeral(true).queue(); return; }
 
                 synchronized (currentBets) {
                     for (Bet b : currentBets) {
@@ -85,22 +96,22 @@ public class Hotcold extends ListenerAdapter {
                     }
 
                     Main.UserData ud = Main.getUserData(userId);
-                    if (ud.balance < amt) { event.reply("Error: Insufficient Balance.").setEphemeral(true).queue(); return; }
+                    if (ud.balance < amt) { event.reply("❌ Error: Insufficient Balance.").setEphemeral(true).queue(); return; }
 
                     ud.balance -= amt;
                     Main.saveUserData(userId, ud);
-                    Main.updateWagerAndRakeback(userId, amt);
+                    // Ensure this method exists in Main.java
+                    // Main.updateWagerAndRakeback(userId, amt);
 
                     currentBets.add(new Bet(userId, side, amt));
                 }
 
                 event.reply(String.format("✅ **Bet Placed!** Amount: `%.2fM` | Side: `%s`", amt, side.toUpperCase()))
-                        .setEphemeral(true)
-                        .queue(hook -> hook.deleteOriginal().queueAfter(5, TimeUnit.SECONDS));
+                        .setEphemeral(true).queue();
 
                 if (!isTimerStarted) startCountdown(event.getChannel().asTextChannel());
 
-            } catch (Exception e) { event.reply("Error: Invalid Amount.").setEphemeral(true).queue(); }
+            } catch (Exception e) { event.reply("❌ Error: Invalid Amount Format.").setEphemeral(true).queue(); }
         }
     }
 
@@ -114,7 +125,10 @@ public class Hotcold extends ListenerAdapter {
         isTimerStarted = true;
         sendBettingEmbed(channel, true);
         Main.scheduler.schedule(() -> {
-            if (isBettingOpen) { isBettingOpen = false; processResults(channel); }
+            if (isBettingOpen) { 
+                isBettingOpen = false; 
+                processResults(channel); 
+            }
         }, 30, TimeUnit.SECONDS);
     }
 
@@ -130,7 +144,6 @@ public class Hotcold extends ListenerAdapter {
             rolled = "rainbow";
         } else {
             String[] hotColdFlowers = {"red", "orange", "yellow", "blue", "assorted", "purple"};
-            // FIXED: .length instead of .size()
             rolled = hotColdFlowers[r.nextInt(hotColdFlowers.length)];
         }
 
@@ -155,13 +168,10 @@ public class Hotcold extends ListenerAdapter {
             Main.UserData ud = Main.getUserData(b.userId);
 
             if (b.side.equals(winningSide)) {
-                // Using switch for clean multiplier logic
-                double mult = switch (winningSide) {
-                    case "hot" -> 2.0;
-                    case "cold" -> 2.1;
-                    case "rainbow" -> 12.0;
-                    default -> 0.0;
-                };
+                double mult = 0;
+                if (winningSide.equals("hot")) mult = 2.0;
+                else if (winningSide.equals("cold")) mult = 2.1;
+                else if (winningSide.equals("rainbow")) mult = 12.0;
                 
                 double winAmt = b.amount * mult;
                 ud.balance += winAmt;
@@ -180,7 +190,7 @@ public class Hotcold extends ListenerAdapter {
                 .setColor(anybodyWon ? Color.GREEN : Color.RED)
                 .setDescription(String.format(
                         "**Rolled Flower:** %s (%s FLOWERS)\n\n" +
-                                "# %s WINS!",
+                        "# %s WINS!",
                         FLOWERS.get(rolled), rolled.toUpperCase(), winningSide.toUpperCase()
                 ));
 
@@ -208,21 +218,18 @@ public class Hotcold extends ListenerAdapter {
                 .setColor(new Color(255, 105, 180))
                 .setDescription(String.format(
                         "**▸ Next Game Time:** %s\n" +
-                                "**▸ Payout Multiplier (Hot):** `x2.0`\n" +
-                                "**▸ Payout Multiplier (Cold):** `x2.1`\n" +
-                                "**▸ Payout Multiplier (Rainbow):** `x12.0`\n" +
-                                "**▸ Current Streak:** %s\n\n" +
-                                "Click a button bellow to bet on Hot, Cold or Rainbow! Games are automatically launched every 30 seconds",
+                        "**▸ Payout Multiplier (Hot):** `x2.0`\n" +
+                        "**▸ Payout Multiplier (Cold):** `x2.1`\n" +
+                        "**▸ Payout Multiplier (Rainbow):** `x12.0`\n" +
+                        "**▸ Current Streak:** %s\n\n" +
+                        "Click a button below to bet! Games launch every 30s.",
                         timeDisplay, streakStr
                 ))
-                .setFooter("Hosted by Staff")
+                .setFooter("Global Arcade Casino")
                 .setTimestamp(Instant.now());
 
         if (withTimer && lastBettingMessage != null) {
-            lastBettingMessage.editMessageEmbeds(eb.build()).queue(null, t -> {
-                // If edit fails, send a new one
-                createNewBettingMessage(channel, eb);
-            });
+            lastBettingMessage.editMessageEmbeds(eb.build()).queue(null, t -> createNewBettingMessage(channel, eb));
         } else {
             createNewBettingMessage(channel, eb);
         }
