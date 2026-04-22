@@ -4,6 +4,7 @@ import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEve
 import net.dv8tion.jda.api.events.interaction.component.ButtonInteractionEvent;
 import net.dv8tion.jda.api.events.interaction.ModalInteractionEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
+import net.dv8tion.jda.api.interactions.commands.OptionMapping; // Added
 import net.dv8tion.jda.api.interactions.components.ActionRow;
 import net.dv8tion.jda.api.interactions.components.buttons.Button;
 import net.dv8tion.jda.api.interactions.components.text.TextInput;
@@ -29,8 +30,18 @@ public class Wallet extends ListenerAdapter {
                     ).queue();
 
         } else if (event.getName().equals("getwallet")) {
-            Member target = event.getOption("user").getAsMember();
-            if (target == null) return;
+            OptionMapping userOption = event.getOption("user");
+            if (userOption == null) {
+                event.reply("❌ User not found.").setEphemeral(true).queue();
+                return;
+            }
+            
+            Member target = userOption.getAsMember();
+            if (target == null) {
+                event.reply("❌ Member not found in this server.").setEphemeral(true).queue();
+                return;
+            }
+
             Main.UserData data = Main.getUserData(target.getId());
             event.replyEmbeds(buildAdminEmbed(target, data).build())
                     .setEphemeral(true)
@@ -49,7 +60,7 @@ public class Wallet extends ListenerAdapter {
         if (id.equals("claim_rakeback")) {
             Main.UserData ud = Main.getUserData(userId);
             if (ud.rakeback < 0.01) {
-                event.reply("❌ Error: Minimum 0.01M required.").setEphemeral(true).queue();
+                event.reply("❌ Error: Minimum 0.01M required to claim.").setEphemeral(true).queue();
                 return;
             }
             double amount = ud.rakeback;
@@ -60,13 +71,21 @@ public class Wallet extends ListenerAdapter {
 
         } else if (id.equals("redeem_code")) {
             event.replyModal(Modal.create("modal_redeem", "Redeem Promo Code")
-                    .addActionRows(ActionRow.of(TextInput.create("promo_code", "Enter Code", TextInputStyle.SHORT).build())).build()).queue();
+                    .addActionRows(ActionRow.of(TextInput.create("promo_code", "Enter Code", TextInputStyle.SHORT)
+                            .setPlaceholder("e.g. FREE10")
+                            .setRequired(true)
+                            .build())).build()).queue();
 
         } else if (id.startsWith("admin_")) {
-            String type = id.contains("credit") ? "Credit" : "Debit";
-            String targetId = id.split("_")[2];
+            String[] parts = id.split("_");
+            String type = parts[1].substring(0, 1).toUpperCase() + parts[1].substring(1); // Credit or Debit
+            String targetId = parts[2];
+            
             event.replyModal(Modal.create("modal_admin_" + type + "_" + targetId, "Admin " + type)
-                    .addActionRows(ActionRow.of(TextInput.create("amount", "Amount (M)", TextInputStyle.SHORT).build())).build()).queue();
+                    .addActionRows(ActionRow.of(TextInput.create("amount", "Amount (M)", TextInputStyle.SHORT)
+                            .setPlaceholder("Enter amount to " + type.toLowerCase())
+                            .setRequired(true)
+                            .build())).build()).queue();
         }
     }
 
@@ -77,23 +96,41 @@ public class Wallet extends ListenerAdapter {
         if (modalId.startsWith("modal_admin_")) {
             String[] p = modalId.split("_");
             try {
-                double amt = Double.parseDouble(event.getValue("amount").getAsString().replace("m", "").trim());
-                Main.UserData ud = Main.getUserData(p[3]);
-                if (p[2].equals("Credit")) { ud.balance += amt; ud.totalCredited += amt; }
-                else { ud.balance -= amt; }
-                Main.saveUserData(p[3], ud);
-                event.reply("✅ Wallet Updated! New Balance: " + String.format("%.2f", ud.balance) + "M").setEphemeral(true).queue();
-            } catch (Exception e) { event.reply("❌ Use numbers only.").setEphemeral(true).queue(); }
+                String type = p[2];
+                String targetId = p[3];
+                double amt = Double.parseDouble(event.getValue("amount").getAsString().toLowerCase().replace("m", "").trim());
+                
+                Main.UserData ud = Main.getUserData(targetId);
+                if (type.equalsIgnoreCase("Credit")) { 
+                    ud.balance += amt; 
+                    ud.totalCredited += amt; 
+                } else { 
+                    ud.balance -= amt; 
+                }
+                
+                Main.saveUserData(targetId, ud);
+                event.reply("✅ Wallet Updated! User: <@" + targetId + ">\nNew Balance: `" + String.format("%.2f", ud.balance) + "M`").setEphemeral(true).queue();
+            } catch (Exception e) { 
+                event.reply("❌ Error: Please enter a valid numeric amount.").setEphemeral(true).queue(); 
+            }
 
         } else if (modalId.equals("modal_redeem")) {
-            String code = event.getValue("promo_code").getAsString();
+            String code = event.getValue("promo_code").getAsString().trim();
             Main.UserData ud = Main.getUserData(event.getUser().getId());
-            if (ud.hasRedeemed) { event.reply("❌ Already redeemed!").setEphemeral(true).queue(); return; }
+            
+            if (ud.hasRedeemed) { 
+                event.reply("❌ You have already redeemed your welcome bonus!").setEphemeral(true).queue(); 
+                return; 
+            }
+            
             if (code.equalsIgnoreCase("free10")) {
-                ud.balance += 10.0; ud.hasRedeemed = true;
+                ud.balance += 10.0; 
+                ud.hasRedeemed = true;
                 Main.saveUserData(event.getUser().getId(), ud);
-                event.reply("✅ Success! 10M Welcome Bonus added.").setEphemeral(true).queue();
-            } else event.reply("❌ Invalid code.").setEphemeral(true).queue();
+                event.reply("✅ Success! 10M Welcome Bonus has been added to your wallet.").setEphemeral(true).queue();
+            } else {
+                event.reply("❌ Invalid or expired promo code.").setEphemeral(true).queue();
+            }
         }
     }
 
