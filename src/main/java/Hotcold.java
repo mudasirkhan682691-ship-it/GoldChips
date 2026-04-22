@@ -19,13 +19,13 @@ import java.util.concurrent.TimeUnit;
 public class Hotcold extends ListenerAdapter {
 
     private static final Map<String, String> FLOWERS = Map.of(
-            "red", "<:red:1495282842329022494>",
-            "orange", "<:orange:1495282953507311646>",
-            "yellow", "<:yellow:1495282879704469594>",
-            "blue", "<:blue:1495282922809327827>",
-            "assorted", "<:assorted:1495283043299233802>",
-            "purple", "<:purple:1495283008251494410>",
-            "rainbow", "<:mixed:1495282804534153296>"
+            "red", "<:red:1496424239450820608>",
+            "orange", "<:orange:1496424381537194175>",
+            "yellow", "<:yellow:1496424271403290806>",
+            "blue", "<:blue:1496424324066971668>",
+            "assorted", "<:assorted:1496424438953017375>",
+            "purple", "<:purple:1496424408737251328>",
+            "rainbow", "<:mixed:1496424200288862260>"
     );
 
     private String hostId = null;
