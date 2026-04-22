@@ -57,10 +57,15 @@ public class Main extends ListenerAdapter {
 
         JDABuilder.createDefault(token)
                 .enableIntents(GatewayIntent.GUILD_MESSAGES, GatewayIntent.GUILD_MEMBERS, GatewayIntent.MESSAGE_CONTENT)
-                .addEventListeners(new Main(), new Flowerpoker(), new Hotcold())
+                // Updated: Added Cashier listener
+                .addEventListeners(new Main(), new Flowerpoker(), new Hotcold(), new Cashier())
                 .build()
                 .updateCommands().addCommands(
                         Commands.slash("wallet", "Check your gold chips wallet"),
+                        // Updated: Added single /cashier command with channel option
+                        Commands.slash("cashier", "Host Deposit/Withdraw System")
+                                .addOption(OptionType.CHANNEL, "channel", "Select the channel for cashier", true)
+                                .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.ADMINISTRATOR)),
                         Commands.slash("getwallet", "Admin: Security Check & Management")
                                 .addOption(OptionType.USER, "user", "Target user", true)
                                 .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.ADMINISTRATOR)),
@@ -75,17 +80,16 @@ public class Main extends ListenerAdapter {
         System.out.println("🚀 Bot is starting with MongoDB support...");
     }
 
-    // --- Database Helper Methods (Fixed for Data Loss) ---
+    // --- Database Helper Methods (Protected for Data Safety) ---
 
     public static UserData getUserData(String userId) {
         if (userCollection == null) {
-            System.err.println("CRITICAL: MongoDB Collection is null. Data cannot be fetched!");
+            System.err.println("CRITICAL: MongoDB Collection is null!");
             return new UserData(); 
         }
 
         Document doc = userCollection.find(new Document("_id", userId)).first();
         if (doc == null) {
-            // New user entry
             UserData newData = new UserData();
             saveUserData(userId, newData);
             return newData;
@@ -94,12 +98,7 @@ public class Main extends ListenerAdapter {
     }
 
     public static void saveUserData(String userId, UserData data) {
-        if (userCollection == null) {
-            System.err.println("CRITICAL: MongoDB Collection is null. Data cannot be saved!");
-            return;
-        }
-        
-        // Ensure balance never becomes negative due to rounding (safety check)
+        if (userCollection == null) return;
         if (data.balance < -0.0001) data.balance = 0;
 
         Document doc = Document.parse(gson.toJson(data));
@@ -141,14 +140,14 @@ public class Main extends ListenerAdapter {
         } else if (id.equals("claim_rakeback")) {
             UserData ud = getUserData(event.getUser().getId());
             if (ud.rakeback < 0.01) {
-                event.reply("Error: You need at least 0.01M rakeback to claim.").setEphemeral(true).queue();
+                event.reply("Error: Minimum 0.01M required.").setEphemeral(true).queue();
                 return;
             }
             double amount = ud.rakeback;
             ud.balance += amount;
             ud.rakeback = 0;
             saveUserData(event.getUser().getId(), ud);
-            event.reply("Successfully claimed " + String.format("%.2f", amount) + "M rakeback!").setEphemeral(true).queue();
+            event.reply("Claimed " + String.format("%.2f", amount) + "M rakeback!").setEphemeral(true).queue();
         } else if (id.equals("redeem_code")) {
             event.replyModal(Modal.create("modal_redeem", "Redeem Code")
                     .addActionRows(ActionRow.of(TextInput.create("promo_code", "Enter Code", TextInputStyle.SHORT).build())).build()).queue();
@@ -169,8 +168,8 @@ public class Main extends ListenerAdapter {
                     ud.balance -= amt;
                 }
                 saveUserData(p[3], ud);
-                event.reply("Wallet Updated! New Balance: " + String.format("%.2f", ud.balance) + "M").setEphemeral(true).queue();
-            } catch (Exception e) { event.reply("Error! Use numbers only.").setEphemeral(true).queue(); }
+                event.reply("Balance: " + String.format("%.2f", ud.balance) + "M").setEphemeral(true).queue();
+            } catch (Exception e) { event.reply("Invalid amount!").setEphemeral(true).queue(); }
         } else if (event.getModalId().equals("modal_redeem")) {
             String code = event.getValue("promo_code").getAsString();
             UserData ud = getUserData(event.getUser().getId());
@@ -178,12 +177,10 @@ public class Main extends ListenerAdapter {
             if (code.equalsIgnoreCase("free10")) {
                 ud.balance += 10.0; ud.hasRedeemed = true;
                 saveUserData(event.getUser().getId(), ud);
-                event.reply("Success! 10M Welcome Bonus added.").setEphemeral(true).queue();
+                event.reply("Success! 10M added.").setEphemeral(true).queue();
             } else event.reply("Invalid code.").setEphemeral(true).queue();
         }
     }
-
-    // --- Embed Builders ---
 
     private EmbedBuilder buildCleanEmbed(User u, UserData d) {
         return new EmbedBuilder().setAuthor(u.getName() + "'s Wallet", null, u.getEffectiveAvatarUrl())
@@ -199,7 +196,6 @@ public class Main extends ListenerAdapter {
         User u = m.getUser();
         long age = ChronoUnit.DAYS.between(u.getTimeCreated(), OffsetDateTime.now());
         return new EmbedBuilder().setAuthor(u.getName(), null, u.getEffectiveAvatarUrl())
-                .setThumbnail(u.getEffectiveAvatarUrl())
                 .setColor(age < 7 ? Color.RED : Color.GREEN)
                 .addField("💰 Balance", "```" + String.format("%.2fM", d.balance) + "```", true)
                 .addField("📥 Deposited", "```" + String.format("%.2fM", d.totalCredited) + "```", true)
@@ -209,7 +205,6 @@ public class Main extends ListenerAdapter {
                 .setTimestamp(Instant.now());
     }
 
-    // Default class with constructor for safety
     public static class UserData { 
         public double balance = 0.0; 
         public double rakeback = 0.0; 
